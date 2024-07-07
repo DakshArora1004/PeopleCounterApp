@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Draw Points to Form a Polygon</title>
+    <style>
+        #canvas {
+            border: 1px solid black;
+            position: relative;
+            margin: 0 auto;
+            display: block;
+        }
+        #annotationForm {
+            text-align: center; /* Center-align the button */
+            margin-top: 10px; /* Add some space between canvas and button */
+        }
+    </style>
+</head>
+<body>
+    <h1>Draw Points to Form a Polygon</h1>
+    <canvas id="canvas"></canvas>
+    <form id="annotationForm">
+        {% csrf_token %}
+        <input type="hidden" id="coordinates" name="coordinates">
+        <button type="button" onclick="completePolygon()">Complete Polygon</button>
+        <button type="button" onclick="saveAnnotation()">Inference</button>
+    </form>
+    <p>Polygon Coordinates:</p>
+    <pre id="coordinatesDisplay"></pre>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let allPolygons = [];
+        let currentPoints = [];
+
+        canvas.width = 800;
+        canvas.height = 500;
+
+        const frameData = 'data:image/jpeg;base64,{{ frame_base64 }}';
+        const img = new Image();
+        img.src = frameData;
+
+        img.onload = function() {
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        };
+
+        canvas.addEventListener('click', function(e) {
+            const x = e.offsetX;
+            const y = e.offsetY;
+            currentPoints.push([x, y]);
+            drawPoints();
+        });
+
+        function drawPoints() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            allPolygons.forEach(polygon => {
+                drawPolygon(polygon);
+            });
+            currentPoints.forEach(point => {
+                ctx.beginPath();
+                ctx.arc(point[0], point[1], 5, 0, Math.PI * 2, true);
+                ctx.fill();
+            });
+        }
+
+        function completePolygon() {
+            fetch('{% url "convex_hull" %}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                },
+                body: JSON.stringify({ points: currentPoints })
+            })
+            .then(response => response.json())
+            .then(hullPoints => {
+                allPolygons.push(hullPoints);
+                drawPoints();  // Redraw to include the new polygon
+                displayCoordinates();
+                currentPoints = [];  // Clear current points after completing the polygon
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+
+        function drawPolygon(hullPoints) {
+            ctx.beginPath();
+            ctx.moveTo(hullPoints[0][0], hullPoints[0][1]);
+            for (let i = 1; i < hullPoints.length; i++) {
+                ctx.lineTo(hullPoints[i][0], hullPoints[i][1]);
+            }
+            ctx.closePath();
+            ctx.stroke();
+        }
+
+        function displayCoordinates() {
+            const coordinatesElement = document.getElementById('coordinatesDisplay');
+            coordinatesElement.textContent = JSON.stringify(allPolygons, null, 2);
+            document.getElementById('coordinates').value = JSON.stringify(allPolygons);
+        }
+
+        function saveAnnotation() {
+            const data = {
+                frame_number: 0,
+                boxes: allPolygons
+            };
+            console.log(data);
+
+            fetch('{% url "view_annotated_video" video.id %}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.redirect_url) {
+                    window.location.href = data.redirect_url;
+                }
+                console.log(data);
+                alert('Polygon saved successfully!');
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+
+        // Ensure currentPoints is cleared when starting a new polygon
+        document.getElementById('canvas').addEventListener('dblclick', function() {
+            currentPoints = [];
+            drawPoints();
+        });
+    </script>
+</body>
+</html>

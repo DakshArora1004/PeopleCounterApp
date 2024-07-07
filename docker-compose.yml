@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    volumes:
+      - .:/footfallapp
+    ports:
+      - "8000:8000"
+    environment:
+      DEBUG: 'true'
+      # DJANGO_SUPERUSER_USERNAME: 'admin'
+      # DJANGO_SUPERUSER_EMAIL: 'admin@example.com'
+      # DJANGO_SUPERUSER_PASSWORD: 'admin'

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Output Video</title>
+    <style>
+        #outputVideo {
+            margin: 0 auto;
+            display: block;
+            width: 800px;
+            height: 500px;
+            border: 1px solid black;
+        }
+        .controls {
+            text-align: center;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h2>Output Video</h2>
+    <!-- Display the saved output video -->
+    <video id="outputVideo" width="800" height="500" controls>
+        <source src="{{ output_video_url }}" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+    <!-- <div class="controls">
+        <button onclick="startPlayback()">Start Playback</button>
+        <button onclick="pausePlayback()">Pause Playback</button>
+    </div> -->
+    <script>
+        // Get the video element
+        var video = document.getElementById('outputVideo');
+
+        function startPlayback() {
+            video.play();
+        }
+
+        function pausePlayback() {
+            video.pause();
+        }
+    </script>
+</body>
+</html>

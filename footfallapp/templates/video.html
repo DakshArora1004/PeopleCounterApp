@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>View Annotated Video</title>
+    <style>
+        #annotationCanvas {
+            border: 1px solid black;
+            position: relative;
+            margin: 0 auto;
+            display: block;
+        }
+        video {
+            display: none; /* Hide the video element initially */
+        }
+        .controls {
+            text-align: center; /* Center-align the button */
+            margin-top: 10px; /* Add some space between canvas and button */
+        }
+    </style>
+</head>
+<body>
+    <h2>View Annotated Video and Start Inference</h2>
+    <canvas id="annotationCanvas" width="800" height="500"></canvas>
+    <!-- Display video with annotated polygons -->
+    <video id="video" width="800" height="500" controls>
+        <source src="{{ video.video_file.url }}" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+    <div class="controls">
+        <button onclick="startInference()">Start Inference</button>
+    </div>
+    <!-- <p>FPS: <span id="fps"></span></p> -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script>
+        // Get the video element and canvas
+        var video = document.getElementById('video');
+        var canvas = document.getElementById('annotationCanvas');
+        var ctx = canvas.getContext('2d');
+
+        // Initialize polygonPoints with the annotations from Django
+        let annotations = {{ annotations|safe }};
+        let polygons = [];
+
+        annotations.forEach(points => {
+            let polygon = points.map(point => ({ x: point[0], y: point[1] }));
+            polygons.push(polygon);
+        });
+
+        let frameChanged = -1;
+        let isDragging = false;
+        let selectedPolygon = -1;
+        let dragStartX, dragStartY;
+
+        let gfps = 0; // Default FPS value, adjust as needed
+        let fetchCount = {}; // Object to track fetch counts for frames
+        let previousCounts = {}; // Object to store previous counts
+        let currentCounts = []; // Array to store current counts for each polygon
+
+        // Initialize currentCounts with zeros
+        for (let i = 0; i < polygons.length; i++) {
+            currentCounts[i] = -1;
+        }
+
+        // Function to fetch FPS from Django view using fetch
+        function fetchFPS(videoId) {
+            return fetch(`/get_fps/${videoId}/`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    return data.fps;  // Return FPS value from the response
+                })
+                .catch(error => {
+                    console.error('Error fetching FPS:', error);
+                    throw error;  // Rethrow the error to handle it further if needed
+                });
+        }
+
+        var flag = false;
+        function startInference() {
+            if (!flag) {
+                video.play();
+                flag = true;
+                triggerInference();
+            }
+        }
+
+        function triggerInference() {
+            fetch('{% url "get_result" video.id %}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                // if (data.redirect_url) {
+                //     window.location.href = data.redirect_url;
+                // }
+
+                console.log(data);
+                console.log("Redircting to output page");
+                // while (!video.ended) {
+                //     console.log("Video not ended");
+                // }
+                redirectToOutput();
+                // Start fetching and displaying counts for each frame
+                // fetchFrameCounts();
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+
+        // Function to fetch output results from Django view using fetch and store it in output variable
+        function fetchOutput(frameNumber) {
+            return fetch(`/getoutputframe/{{video.id}}/${frameNumber}/`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    return data;  // Return output data from the response
+                })
+                .catch(error => {
+                    console.error('Error fetching output:', error);
+                    throw error;  // Rethrow the error to handle it further if needed
+                });
+        }
+
+        var fetched = [];
+        function fetchFrameCounts() {
+            const currentTime = video.currentTime;
+            const frameNumber = Math.round(currentTime * gfps);
+
+            if (fetchCount[frameNumber] >= 1) {
+                // If the frame has been fetched twice already, skip fetching
+                return;
+            }
+
+            fetchCount[frameNumber] = (fetchCount[frameNumber] || 0) + 1;
+            if (!fetched.includes(frameNumber)) {
+                // fetched.push(frameNumber);
+                fetchOutput(frameNumber)
+                    .then(output => {
+                        polygons.forEach((points, index) => {
+                            const count = output.count[index];
+                            const frame_n = output.frame;
+                            if (previousCounts[frameNumber] === undefined) {
+                                previousCounts[frameNumber] = {};
+                            }
+                            if (previousCounts[frameNumber][index] !== count) {
+                                currentCounts[index] = count;
+                                previousCounts[frameNumber][index] = count;
+                                fetched.push(frame_n);
+                            }
+                        });
+                        drawPolygons();
+                    })
+                    .catch(error => {
+                        console.error('Error fetching frame counts:', error);
+                    });
+            }
+        }
+
+        function getCentroid(points) {
+            let x = 0, y = 0;
+            points.forEach(point => {
+                x += point.x;
+                y += point.y;
+            });
+            return { x: x / points.length, y: y / points.length };
+        }
+
+        function drawCountAtCentroid(centroid, count) {
+            ctx.fillStyle = 'blue';
+            ctx.font = '20px Arial';
+            ctx.fillText(count, centroid.x, centroid.y);
+        }
+
+        // Function to draw polygons on canvas
+        function drawPolygons() {
+            ctx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
+            ctx.drawImage(video, 0, 0, annotationCanvas.width, annotationCanvas.height);
+
+            polygons.forEach((points, index) => {
+                ctx.beginPath();
+                ctx.moveTo(points[0].x, points[0].y);
+                for (let i = 1; i < points.length; i++) {
+                    ctx.lineTo(points[i].x, points[i].y);
+                }
+                ctx.closePath();
+                ctx.lineWidth = 2;
+                if (index === selectedPolygon) {
+                    ctx.strokeStyle = 'blue';  // Highlight selected polygon in blue
+                } else {
+                    ctx.strokeStyle = 'red';
+                }
+                ctx.stroke();
+
+                // Draw the count at the centroid
+                const centroid = getCentroid(points);
+                if (currentCounts[index] !== -1){
+                    drawCountAtCentroid(centroid, currentCounts[index]);
+
+                }
+            });
+        }
+
+        // Function to handle mouse events on annotationCanvas
+        annotationCanvas.addEventListener('mousedown', function(event) {
+            const mouseX = event.clientX - annotationCanvas.getBoundingClientRect().left;
+            const mouseY = event.clientY - annotationCanvas.getBoundingClientRect().top;
+
+            // Check if mouse is inside any polygon
+            for (let i = 0; i < polygons.length; i++) {
+                if (isPointInPolygon(mouseX, mouseY, polygons[i])) {
+                    isDragging = true;
+                    selectedPolygon = i;
+                    dragStartX = mouseX;
+                    dragStartY = mouseY;
+                    break;
+                }
+            }
+        });
+
+        annotationCanvas.addEventListener('mousemove', function(event) {
+            if (isDragging && selectedPolygon !== -1) {
+                const offsetX = event.clientX - annotationCanvas.getBoundingClientRect().left;
+                const offsetY = event.clientY - annotationCanvas.getBoundingClientRect().top;
+
+                const deltaX = offsetX - dragStartX;
+                const deltaY = offsetY - dragStartY;
+
+                // Move the selected polygon
+                polygons[selectedPolygon].forEach(point => {
+                    point.x += deltaX;
+                    point.y += deltaY;
+                });
+
+                drawPolygons();
+
+                // Update drag start position
+                dragStartX = offsetX;
+                dragStartY = offsetY;
+            }
+        });
+
+        annotationCanvas.addEventListener('mouseup', function(event) {
+            if (isDragging && selectedPolygon !== -1) {
+                isDragging = false;
+                frameChanged = Math.round(video.currentTime * gfps); // Round to nearest frame number
+                let boxCoordinates = polygons.map(points => points.map(point => [point.x, point.y]));
+                console.log(`Polygon moved at frame ${frameChanged}:`, boxCoordinates);
+
+                // Prepare data to send
+                const data = {
+                    frame_number: frameChanged,
+                    boxes: boxCoordinates
+                };
+
+                // POST request to store_data endpoint
+                fetch('{% url "store_data" video.id %}', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    },
+                    body: JSON.stringify(data)
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log(data);
+                    // alert(`Annotation saved successfully!${data}`);
+                    // Optionally, clear polygons or update UI after successful save
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                });
+            }
+        });
+
+        // Function to check if a point (x, y) is inside the polygon
+        function isPointInPolygon(x, y, points) {
+            let inside = false;
+            for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+                const xi = points[i].x, yi = points[i].y;
+                const xj = points[j].x, yj = points[j].y;
+                const intersect = ((yi > y) !== (yj > y)) &&
+                (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+                if (intersect) inside = !inside;
+                }
+                return inside;
+                }
+                
+        function redirectToOutput() {
+            // sleep for 5 seconds
+            // setTimeout(() => {
+            //     window.location.href = "{% url 'get_output_video' video.id %}";
+            // }, 5000);
+            window.location.href = "{% url 'get_output_video' video.id %}";
+        }
+
+        // Fetch FPS and update gfps variable
+        fetchFPS({{ video.id }})
+            .then(fps => {
+                console.log("FPS:", fps);  // Log FPS value once it's fetched
+                gfps = fps;  // Assign fetched FPS value to gfps variable
+                // Set interval to draw polygons based on gfps
+                setInterval(drawPolygons, 1000 / gfps);
+            })
+            .catch(error => {
+                console.error('Failed to fetch FPS:', error);
+            });
+
+        // Update canvas with frame counts periodically
+        setInterval(() => {
+            // if (flag && video.ended){
+            //     redirectToOutput();
+            // }
+            if (flag && !video.paused) {
+                fetchFrameCounts();
+            }
+        }, 1000 / gfps);
+
+        
+
+        // function to redirect to output page
+
+    </script>
+</body>
+</html>
